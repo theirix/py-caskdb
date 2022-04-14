@@ -125,19 +125,10 @@ class DiskStorage:
                     int(file_id_str): content
                     for file_id_str, content in deserialized.items()
                 }
-        logger.info("Registry", self._registry)
-        # open descriptors
-        self._fds = dict()
+        logger.info("Registry {self._registry}")
+
         sorted_file_ids = sorted(self._registry.keys())
-        for file_id in sorted_file_ids:
-            assert isinstance(file_id, int)
-            data_file = self._registry[file_id]
-            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
-            if os.path.isfile(data_path):
-                fd = open(data_path, "r+b")
-            else:
-                fd = open(data_path, "w+b")
-            self._fds[file_id] = fd
+        self._open_descriptors(sorted_file_ids)
 
         if not self._registry:
             logger.info("Add first file")
@@ -147,6 +138,19 @@ class DiskStorage:
 
         for file_id in sorted_file_ids:
             self._fill_keydir(file_id)
+
+    def _open_descriptors(self, file_ids):
+        # open descriptors
+        self._fds = dict()
+        for file_id in file_ids:
+            assert isinstance(file_id, int)
+            data_file = self._registry[file_id]
+            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+            if os.path.isfile(data_path):
+                fd = open(data_path, "r+b")
+            else:
+                fd = open(data_path, "w+b")
+            self._fds[file_id] = fd
 
     def _active_file_id(self) -> int:
         file_id = max(self._registry.keys())
@@ -297,9 +301,13 @@ class DiskStorage:
         self._keydir.delete(key)
 
     def close(self) -> None:
+        # Flush active file
         fd = self._fds[self._active_file_id()]
         fd.flush()
-        fd.close()
+
+        for file_id, fd in self._fds.items():
+            logger.debug(f"Closing fd for file {file_id}")
+            fd.close()
 
     def clean(self) -> None:
         for data_file in self._registry.values():
