@@ -25,10 +25,9 @@ import os.path
 import typing
 import datetime
 from dataclasses import dataclass
-from sortedcontainers import SortedDict
+from sortedcontainers import SortedDict  # type: ignore
 
 from format import encode_kv, decode_kv, decode_header, HEADER_SIZE
-
 
 # DiskStorage is a Log-Structured Hash Table as described in the BitCask paper. We
 # keep appending the data to a file, like a log. DiskStorage maintains an in-memory
@@ -69,11 +68,18 @@ class KeyDirEntry:
 
 
 class KeyDir:
-    def __init__(self):
+    """In-memory keydir structure.
+
+    Stores all the keys.
+    Allow quick traversal
+    """
+
+    def __init__(self) -> None:
+        # RedBlack Tree-like structure
         self._dir = SortedDict()
 
-    def get(self, key: str) -> typing.Optional[KeyDirEntry]:
-        return self._dir.get(key)
+    def get(self, key: str) -> KeyDirEntry | None:
+        return self._dir.get(key)  # type: ignore
 
     def set(self, key: str, entry: KeyDirEntry) -> None:
         self._dir[key] = entry
@@ -96,7 +102,124 @@ class KeyDir:
                 break
 
     def keys(self) -> typing.Iterable[str]:
-        return self._dir.keys()
+        return self._dir.keys()  # type: ignore
+
+
+class Registry:
+    """Represents mapping from file id to file path.
+
+    Stored in JSON file in database directory.
+    """
+
+    def __init__(self, registry_name: str):
+        self._registry_name = registry_name
+
+        self._registry: dict[int, str] = dict()
+
+        if os.path.isfile(registry_name):
+            logger.info("Open existing registry {}".format(self._registry_name))
+
+            with open(registry_name, "rt") as f:
+                deserialized = json.load(f)
+                self._registry = {
+                    int(file_id_str): content
+                    for file_id_str, content in deserialized.items()
+                }
+        logger.info(f"Registry of {len(self._registry)} elements")
+
+    def save(self) -> None:
+        """Saves metadata to file"""
+        with open(self._registry_name, "wt") as f:
+            serialized = {
+                str(file_id): content for file_id, content in self._registry.items()
+            }
+            json.dump(serialized, f, indent=True)
+
+    def empty(self) -> bool:
+        return not self._registry
+
+    def size(self) -> int:
+        return len(self._registry)
+
+    def sorted_key_ids(self) -> typing.Iterable[int]:
+        """Provide all file ids in sorted order"""
+        return sorted(self._registry.keys())
+
+    def data_path(self, file_id: int) -> str:
+        """Provide full path to file with id `file_id"""
+        data_file = self._registry[file_id]
+        data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+        return data_path
+
+    def active_file_id(self) -> int:
+        """Return active file id"""
+        if not self._registry:
+            raise ValueError("Empty registry is not allowed")
+        return max(self._registry.keys())
+
+    def add_file(self) -> int:
+        if self._registry:
+            file_id = self.active_file_id() + 1
+        else:
+            file_id = 0
+
+        data_file = f"data_{file_id:0>2}.bin"
+        self._registry[file_id] = data_file
+
+        if os.path.isfile(self.data_path(file_id)):
+            raise RuntimeError(f"File {data_file} already exist for {file_id=}")
+
+        logger.info(f"Added file {file_id}")
+
+        return file_id
+
+    def remove_file(self, file_id: int) -> None:
+        """Disassociate and remove file `file_id"""
+        logger.info(f"Removing file {file_id}")
+        data_path = self.data_path(file_id)
+        if os.path.isfile(data_path):
+            os.remove(data_path)
+        del self._registry[file_id]
+
+
+class FileDescriptors:
+    """Represents file desscriptor table."""
+
+    def __init__(self, registry: Registry):
+        self._registry = registry
+
+        self._fds: dict[int, typing.BinaryIO] = {}
+
+        for file_id in registry.sorted_key_ids():
+            assert isinstance(file_id, int)
+            data_path = registry.data_path(file_id)
+            if os.path.isfile(data_path):
+                # Open non-active files as read-only
+                fd = open(data_path, "r+b")
+            else:
+                fd = open(data_path, "w+b")
+            self._fds[file_id] = fd
+
+    def file_obj(self, file_id: int) -> typing.BinaryIO:
+        if file_id not in self._fds:
+            raise ValueError(f"File {file_id} not opened")
+        return self._fds[file_id]
+
+    def open(self, file_id: int) -> None:
+        """Open new file for writing"""
+        logger.info(f"Open fd for file {file_id}")
+        data_path = self._registry.data_path(file_id)
+        fd = open(data_path, "w+b")
+        self._fds[file_id] = fd
+
+    def close(self, file_id: int) -> None:
+        logger.info(f"Closing fd for file {file_id}")
+        if file_id not in self._fds:
+            raise ValueError(f"File {file_id} not opened")
+        fd = self._fds[file_id]
+        fd.flush()
+        fd.close()
+        del self._fds[file_id]
 
 
 class DiskStorage:
@@ -110,87 +233,37 @@ class DiskStorage:
     """
 
     def __init__(self, file_name: str = "data.db", max_size: int = -1):
-        self._registry_name = file_name
-        logger.info("Provided registry {}".format(self._registry_name))
         self._max_size = max_size
+
         # active file size
         self._size = 0
 
-        if not os.path.isfile(self._registry_name):
-            self._registry = dict()
-        else:
-            with open(self._registry_name, "rt") as f:
-                deserialized = json.load(f)
-                self._registry = {
-                    int(file_id_str): content
-                    for file_id_str, content in deserialized.items()
-                }
-        logger.info("Registry {self._registry}")
+        # Registry for storing associations from fileid to filename
+        self._registry = Registry(file_name)
 
-        sorted_file_ids = sorted(self._registry.keys())
-        self._open_descriptors(sorted_file_ids)
+        self._descriptors = FileDescriptors(self._registry)
 
-        if not self._registry:
+        if self._registry.empty():
             logger.info("Add first file")
             self._registry_add_file()
 
+        # Populate key dir
         self._keydir = KeyDir()
-
-        for file_id in sorted_file_ids:
+        for file_id in self._registry.sorted_key_ids():
             self._fill_keydir(file_id)
 
-    def _open_descriptors(self, file_ids):
-        # open descriptors
-        self._fds = dict()
-        for file_id in file_ids:
-            assert isinstance(file_id, int)
-            data_file = self._registry[file_id]
-            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
-            if os.path.isfile(data_path):
-                fd = open(data_path, "r+b")
-            else:
-                fd = open(data_path, "w+b")
-            self._fds[file_id] = fd
-
-    def _active_file_id(self) -> int:
-        file_id = max(self._registry.keys())
-        assert isinstance(file_id, int)
-        return file_id
-
-    def _registry_count_files(self):
-        return len(self._registry)
-
-    def _registry_add_file(self):
-        if self._registry:
-            file_id = self._active_file_id() + 1
-        else:
-            file_id = 0
-        data_file = f"data_{file_id:0>2}.bin"
-        self._registry[file_id] = data_file
-
-        data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
-        if os.path.isfile(data_path):
-            raise RuntimeError(
-                f"File {data_file} already exist for {file_id=}; registry={self._registry}"
-            )
+    def _registry_add_file(self) -> None:
+        file_id = self._registry.add_file()
 
         # it is a new file
-        fd = open(data_path, "w+b")
-        self._fds[file_id] = fd
+        self._descriptors.open(file_id)
+
         self._size = 0
 
-        self._save_registry()
-
-    def _save_registry(self):
-        # write metadata
-        with open(self._registry_name, "wt") as f:
-            serialized = {
-                str(file_id): content for file_id, content in self._registry.items()
-            }
-            json.dump(serialized, f, indent=True)
+        self._registry.save()
 
     def _fill_keydir(self, file_id: int) -> None:
-        fd = self._fds[file_id]
+        fd = self._descriptors.file_obj(file_id)
 
         # Determine size
         fd.seek(0, 2)
@@ -230,20 +303,23 @@ class DiskStorage:
         return round(datetime.datetime.utcnow().timestamp())
 
     def set(self, key: str, value: str) -> None:
-        fd = self._fds[self._active_file_id()]
+        fd = self._descriptors.file_obj(self._registry.active_file_id())
 
         timestamp = self._timestamp()
         size, data = encode_kv(timestamp, key, value)
 
         offset = fd.seek(self._size)
-        logger.debug(f"set seek to {offset}")
+        logger.debug(f"seek to {offset}")
         # logger.debug(f"write size {size+4} bytes, data {data.hex()}")
         fd.write(data)
         write_size = 4 + HEADER_SIZE + size
         self._size += write_size
 
         entry = KeyDirEntry(
-            pos=offset, size=size, tstamp=timestamp, file_id=self._active_file_id()
+            pos=offset,
+            size=size,
+            tstamp=timestamp,
+            file_id=self._registry.active_file_id(),
         )
         self._keydir.set(key, entry)
 
@@ -252,12 +328,15 @@ class DiskStorage:
         if self._max_size != -1 and self._size > self._max_size:
             self.split()
 
-    def split(self):
+    def split(self) -> None:
+        """Activate new file and move current active to non-active."""
         self._registry_add_file()
 
-    def compact(self):
-        # Compact all exisiting files to new active file
-        sorted_file_ids = sorted(self._registry.keys())
+    def compact(self) -> None:
+        """Compact all exisiting files to new active file."""
+
+        # Save the iterable to list
+        sorted_file_ids = list(self._registry.sorted_key_ids())
 
         # Add new file
         self._registry_add_file()
@@ -270,22 +349,17 @@ class DiskStorage:
         # Close and remove all previous files
         for file_id in sorted_file_ids:
             logger.info(f"Closing {file_id}")
-            self._fds[file_id].close()
-            data_file = self._registry[file_id]
-            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
-            if os.path.isfile(data_path):
-                os.remove(data_path)
-            del self._fds[file_id]
-            del self._registry[file_id]
+            self._descriptors.close(file_id)
+            self._registry.remove_file(file_id)
 
-        self._save_registry()
+        self._registry.save()
 
     def get(self, key: str) -> str:
         entry = self._keydir.get(key)
         if entry is None:
             return ""
 
-        fd = self._fds[entry.file_id]
+        fd = self._descriptors.file_obj(entry.file_id)
         logger.debug(f"get seek to {entry.pos} with size {entry.size}")
         fd.seek(entry.pos)
         read_size = 4 + HEADER_SIZE + entry.size
@@ -301,17 +375,12 @@ class DiskStorage:
         self._keydir.delete(key)
 
     def close(self) -> None:
-        # Flush active file
-        fd = self._fds[self._active_file_id()]
-        fd.flush()
-
-        for file_id, fd in self._fds.items():
-            logger.debug(f"Closing fd for file {file_id}")
-            fd.close()
+        for file_id in self._registry.sorted_key_ids():
+            self._descriptors.close(file_id)
 
     def clean(self) -> None:
-        for data_file in self._registry.values():
-            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+        for file_id in self._registry.sorted_key_ids():
+            data_path = self._registry.data_path(file_id)
             if os.path.isfile(data_path):
                 os.remove(data_path)
 
