@@ -213,9 +213,9 @@ class FileDescriptors:
         self._fds[file_id] = fd
 
     def close(self, file_id: int) -> None:
-        logger.info(f"Closing fd for file {file_id}")
         if file_id not in self._fds:
-            raise ValueError(f"File {file_id} not opened")
+            return
+        logger.info(f"Closing fd for file {file_id}")
         fd = self._fds[file_id]
         fd.flush()
         fd.close()
@@ -348,7 +348,7 @@ class DiskStorage:
 
         # Close and remove all previous files
         for file_id in sorted_file_ids:
-            logger.info(f"Closing {file_id}")
+            logger.info(f"Closing orphan {file_id}")
             self._descriptors.close(file_id)
             self._registry.remove_file(file_id)
 
