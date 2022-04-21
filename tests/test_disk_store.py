@@ -149,10 +149,10 @@ class TestDiskCDB(unittest.TestCase):
         assert scanned == []
 
     @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=100))
-    def test_multi(self, keys) -> None:
+    def test_multi(self, keys: typing.List[str]) -> None:
         store = DiskStorage(file_name=self.file.path)
 
-        def genv(key):
+        def genv(key: str) -> str:
             return f"value_{key}."
 
         for k in keys:
@@ -189,6 +189,8 @@ class TestDiskCDB(unittest.TestCase):
                 os.path.dirname(self.file.path), f"data_0{file_id}.bin"
             )
             assert os.path.isfile(data_path)
+
+        store.close()
 
     def test_two_delete(self) -> None:
         store = DiskStorage(file_name=self.file.path, max_size=60)
@@ -246,12 +248,17 @@ class TestDiskCDB(unittest.TestCase):
         for k, v in zip(keys, values):
             self.assertEqual(store.get(k), v)
 
-    @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=100))
-    @settings(deadline=datetime.timedelta(seconds=5))
-    def test_compaction_hyp(self, keys) -> None:
-        store = DiskStorage(file_name=self.file.path, max_size=100)
+        store.close()
 
-        def genv(key):
+
+class TestDiskCDBPropertyBased(unittest.TestCase):
+    @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=1000))
+    @settings(deadline=datetime.timedelta(seconds=5))
+    def test_compaction_hyp(self, keys: typing.List[str]) -> None:
+        file = TempStorageFile()
+        store = DiskStorage(file_name=file.path, max_size=100)
+
+        def genv(key: str) -> str:
             return f"value_{key}."
 
         actual = {}
@@ -273,14 +280,17 @@ class TestDiskCDB(unittest.TestCase):
         store.close()
 
         # Reopen
-        store = DiskStorage(file_name=self.file.path)
+        store = DiskStorage(file_name=file.path)
         for k in keys:
             self.assertEqual(store.get(k), actual[k])
         store.close()
 
+        file.clean_up()
+
 
 class TestDiskCDBExistingFile(unittest.TestCase):
     def setUp(self) -> None:
+        logging.basicConfig(stream=sys.stdout, level="INFO")
         self.file: TempStorageFile = TempStorageFile()
 
     def tearDown(self) -> None:
