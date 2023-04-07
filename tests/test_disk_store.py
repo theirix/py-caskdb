@@ -85,6 +85,38 @@ class TestDiskCDB(unittest.TestCase):
             self.assertEqual(store.get(k), v)
         store.close()
 
+    def test_dict_delete(self) -> None:
+        store = DiskStorage(file_name=self.file.path)
+        store["name"] = "jojo"
+        store["foo"] = "fooval"
+        store.delete("name")
+        self.assertEqual(store["name"], "")
+        self.assertEqual(store["foo"], "fooval")
+        store.close()
+
+    def test_dict_delete_write(self) -> None:
+        store = DiskStorage(file_name=self.file.path)
+        store["name"] = "jojo"
+        store["foo"] = "fooval"
+        store.delete("name")
+        store["name"] = "new"
+        self.assertEqual(store["name"], "new")
+        self.assertEqual(store["foo"], "fooval")
+        store.close()
+
+    def test_dict_delete_reopen(self) -> None:
+        store = DiskStorage(file_name=self.file.path)
+        store["name"] = "jojo"
+        store["foo"] = "fooval"
+        store.delete("name")
+        store.close()
+
+        store = DiskStorage(file_name=self.file.path)
+        self.assertEqual(store["name"], "")
+        self.assertEqual(store["foo"], "fooval")
+        store.close()
+
+
 
 class TestDiskCDBExistingFile(unittest.TestCase):
     def test_get_new_file(self) -> None:

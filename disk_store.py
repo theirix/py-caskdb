@@ -72,6 +72,10 @@ class KeyDir:
     def set(self, key: str, entry: KeyDirEntry) -> None:
         self._dir[key] = entry
 
+    def delete(self, key: str) -> None:
+        if key in self._dir:
+            del self._dir[key]
+
 
 class DiskStorage:
     """
@@ -164,6 +168,10 @@ class DiskStorage:
         if key != read_key:
             raise ValueError(f"Different keys: keydir {key}, disk {read_key}")
         return read_value
+
+    def delete(self, key: str) -> None:
+        self.set(key, '')
+        self._keydir.delete(key)
 
     def close(self) -> None:
         self._file.flush()
