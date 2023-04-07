@@ -35,19 +35,61 @@ For the workshop, the functions will have the following signature:
     def encode_kv(timestamp: int, key: str, value: str) -> tuple[int, bytes]
     def decode_kv(data: bytes) -> tuple[int, str, str]
 """
+import zlib
+from struct import pack, unpack
+
+# Record layout
+# CRC | header | key | value
+
+# Header layout:
+# timestamp | key_size | value_size
+
+HEADER_SIZE = 4 * 3
 
 
 def encode_header(timestamp: int, key_size: int, value_size: int) -> bytes:
-    raise NotImplementedError
+    if key_size < 0 or value_size < 0:
+        raise ValueError("Wrong size")
+    return pack("!LLL", timestamp, key_size, value_size)
 
 
 def encode_kv(timestamp: int, key: str, value: str) -> tuple[int, bytes]:
-    raise NotImplementedError
+    bkey = key.encode("utf-8")
+    bvalue = value.encode("utf-8")
+
+    # Calculate crc
+    crc = zlib.crc32(pack("!L", timestamp) + bkey + bvalue)
+    crc_bytes = pack("!L", crc)
+
+    header = encode_header(timestamp, len(bkey), len(bvalue))
+
+    data = crc_bytes + header + bkey + bvalue
+
+    return len(bkey) + len(bvalue), data
 
 
 def decode_kv(data: bytes) -> tuple[int, str, str]:
-    raise NotImplementedError
+    actual_crc = unpack("!L", data[0:4])[0]
+    timestamp, key_size, value_size = decode_header(data[4 : 4 + HEADER_SIZE])
+
+    bkey = data[4 + HEADER_SIZE : 4 + HEADER_SIZE + key_size]
+    bvalue = data[4 + HEADER_SIZE + key_size : 4 + HEADER_SIZE + key_size + value_size]
+
+    # Calculate crc
+    crc = zlib.crc32(pack("!L", timestamp) + bkey + bvalue)
+
+    if crc != actual_crc:
+        raise ValueError("Wrong CRC")
+
+    key = bkey.decode("utf-8")
+    value = bvalue.decode("utf-8")
+
+    return timestamp, key, value
 
 
 def decode_header(data: bytes) -> tuple[int, int, int]:
-    raise NotImplementedError
+    unpacked = unpack("!LLL", data)
+    timestamp = unpacked[0]
+    key_size = unpacked[1]
+    value_size = unpacked[2]
+    return timestamp, key_size, value_size

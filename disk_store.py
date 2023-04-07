@@ -20,10 +20,11 @@ Typical usage example:
     disk["hamlet"] = "shakespeare"
 """
 import os.path
-import time
 import typing
+import datetime
+from dataclasses import dataclass
 
-from format import encode_kv, decode_kv, decode_header
+from format import encode_kv, decode_kv, decode_header, HEADER_SIZE
 
 
 # DiskStorage is a Log-Structured Hash Table as described in the BitCask paper. We
@@ -53,6 +54,25 @@ from format import encode_kv, decode_kv, decode_header
 # Read the paper for more details: https://riak.com/assets/bitcask-intro.pdf
 
 
+@dataclass(frozen=True)
+class KeyDirEntry:
+    file_name: str
+    size: int
+    pos: int
+    tstamp: int
+
+
+class KeyDir:
+    def __init__(self):
+        self._dir = dict()
+
+    def get(self, key: str) -> typing.Optional[KeyDirEntry]:
+        return self._dir.get(key)
+
+    def set(self, key: str, entry: KeyDirEntry) -> None:
+        self._dir[key] = entry
+
+
 class DiskStorage:
     """
     Implements the KV store on the disk
@@ -64,16 +84,90 @@ class DiskStorage:
     """
 
     def __init__(self, file_name: str = "data.db"):
-        raise NotImplementedError
+        self._file_name = file_name
+        if os.path.isfile(file_name):
+            self._file = open(file_name, "r+b")
+        else:
+            self._file = open(file_name, "w+b")
+        self._keydir = KeyDir()
+
+        # Determine size
+        self._file.seek(0, 2)
+        self._size = self._file.tell()
+
+        self._fill_keydir()
+
+    def _fill_keydir(self) -> None:
+        print(f"Fill keydir initially size={self._size}")
+        pos = 0
+        while pos < self._size:
+            # Read header
+            self._file.seek(pos + 4)
+            header = self._file.read(HEADER_SIZE)
+            timestamp, key_size, value_size = decode_header(header)
+            print(f"From {pos=} read header {timestamp=} {key_size=} {value_size=}")
+
+            # Re-read whole entry
+            self._file.seek(pos)
+            read_size = 4 + HEADER_SIZE + key_size + value_size
+            data = self._file.read(read_size)
+            print(f"From {pos=} read data {read_size=}")
+
+            timestamp, key, _ = decode_kv(data)
+
+            entry = KeyDirEntry(
+                pos=pos,
+                size=key_size + value_size,
+                tstamp=timestamp,
+                file_name=self._file_name,
+            )
+            self._keydir.set(key, entry)
+
+            print(f"init keydir key={key} entry={entry}")
+
+            pos += read_size
+
+        assert pos == self._size
+
+    def _timestamp(self) -> int:
+        return round(datetime.datetime.utcnow().timestamp())
 
     def set(self, key: str, value: str) -> None:
-        raise NotImplementedError
+        timestamp = self._timestamp()
+        size, data = encode_kv(timestamp, key, value)
+
+        offset = self._file.seek(self._size)
+        print(f"set seek to {offset}")
+        # print(f"write size {size+4} bytes, data {data.hex()}")
+        self._file.write(data)
+        write_size = 4 + HEADER_SIZE + size
+        self._size += write_size
+
+        entry = KeyDirEntry(
+            pos=offset, size=size, tstamp=timestamp, file_name=self._file_name
+        )
+        self._keydir.set(key, entry)
+
+        print(f"set keydir key={key} entry={entry}, size so far {self._size}")
 
     def get(self, key: str) -> str:
-        raise NotImplementedError
+        entry = self._keydir.get(key)
+        if entry is None:
+            return ""
+
+        print(f"get seek to {entry.pos} with size {entry.size}")
+        self._file.seek(entry.pos)
+        read_size = 4 + HEADER_SIZE + entry.size
+        data = self._file.read(read_size)
+        # print(f"read size {entry.size+4} bytes, data {data.hex()}")
+        timestamp, read_key, read_value = decode_kv(data)
+        if key != read_key:
+            raise ValueError(f"Different keys: keydir {key}, disk {read_key}")
+        return read_value
 
     def close(self) -> None:
-        raise NotImplementedError
+        self._file.flush()
+        self._file.close()
 
     def __setitem__(self, key: str, value: str) -> None:
         return self.set(key, value)

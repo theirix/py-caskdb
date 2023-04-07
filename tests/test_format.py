@@ -14,9 +14,14 @@ HEADER_SIZE: typing.Final[int] = 0
 def get_random_header() -> tuple[int, int, int]:
     # we use 4 bytes to store the int, so max value cannot be greater than
     # the following
-    max_size: int = (2**32) - 1
-    random_int: typing.Callable[[], int] = lambda: random.randint(0, max_size)
-    return random_int(), random_int(), random_int()
+    max_ts: int = (2**32) - 1
+    max_size: int = (2**8) - 1
+    # random_int: typing.Callable[[], int] = lambda: random.randint(0, max_size)
+    # return random_int(), random_int(), random_int()
+    timestamp = random.randint(0, max_ts)
+    key_size = random.randint(0, max_size)
+    value_size = random.randint(0, max_size)
+    return timestamp, key_size, value_size
 
 
 def get_random_kv() -> tuple[int, str, str, int]:
