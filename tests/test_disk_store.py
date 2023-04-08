@@ -116,6 +116,27 @@ class TestDiskCDB(unittest.TestCase):
         self.assertEqual(store["foo"], "fooval")
         store.close()
 
+    def test_range(self) -> None:
+        store = DiskStorage(file_name=self.file.path)
+
+        tests = {
+            "crime and punishment": "dostoevsky",
+            "anna karenina": "tolstoy",
+            "war and peace": "tolstoy",
+            "hamlet": "shakespeare",
+            "othello": "shakespeare",
+            "brave new world": "huxley",
+            "dune": "frank herbert",
+        }
+        for k, v in tests.items():
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+
+        scanned = list(sorted(list(store.scan("brave", "hackers"))))
+        assert scanned == ["brave new world", "crime and punishment", "dune"]
+
+        scanned = list(sorted(list(store.scan("brave", "aelita"))))
+        assert scanned == []
 
 
 class TestDiskCDBExistingFile(unittest.TestCase):

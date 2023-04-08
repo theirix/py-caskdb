@@ -23,6 +23,7 @@ import os.path
 import typing
 import datetime
 from dataclasses import dataclass
+from sortedcontainers import SortedDict
 
 from format import encode_kv, decode_kv, decode_header, HEADER_SIZE
 
@@ -64,7 +65,7 @@ class KeyDirEntry:
 
 class KeyDir:
     def __init__(self):
-        self._dir = dict()
+        self._dir = SortedDict()
 
     def get(self, key: str) -> typing.Optional[KeyDirEntry]:
         return self._dir.get(key)
@@ -75,6 +76,17 @@ class KeyDir:
     def delete(self, key: str) -> None:
         if key in self._dir:
             del self._dir[key]
+
+    def range(self, start: str, end: str) -> typing.Iterable[str]:
+        keys = self._dir.keys()
+        start_idx = self._dir.bisect_left(start)
+        if start_idx == len(self._dir):
+            return
+        for idx in range(start_idx, len(self._dir)):
+            if keys[idx] <= end:
+                yield keys[idx]
+            else:
+                break
 
 
 class DiskStorage:
@@ -170,7 +182,7 @@ class DiskStorage:
         return read_value
 
     def delete(self, key: str) -> None:
-        self.set(key, '')
+        self.set(key, "")
         self._keydir.delete(key)
 
     def close(self) -> None:
@@ -182,3 +194,6 @@ class DiskStorage:
 
     def __getitem__(self, item: str) -> str:
         return self.get(item)
+
+    def scan(self, start: str, end: str) -> typing.Iterable[str]:
+        yield from self._keydir.range(start, end)
