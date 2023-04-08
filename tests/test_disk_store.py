@@ -1,3 +1,5 @@
+import json
+import os.path
 import shutil
 import tempfile
 import typing
@@ -39,7 +41,7 @@ class TempStorageFile:
         # destructor method gets called whenever the object goes out of scope, and it
         # will delete our database file. Having a separate method would give us better
         # control.
-        if self.dirpath and len(self.dirpath.split('/')) > 2:
+        if self.dirpath and len(self.dirpath.split("/")) > 2:
             shutil.rmtree(self.dirpath)
 
 
@@ -146,7 +148,8 @@ class TestDiskCDB(unittest.TestCase):
     def test_multi(self, keys) -> None:
         store = DiskStorage(file_name=self.file.path)
 
-        def genv(key): return f"value_{key}."
+        def genv(key):
+            return f"value_{key}."
 
         for k in keys:
             v = genv(k)
@@ -161,17 +164,70 @@ class TestDiskCDB(unittest.TestCase):
             self.assertEqual(store.get(k), genv(k))
         store.close()
 
+    def test_two(self) -> None:
+        store = DiskStorage(file_name=self.file.path, max_size=60)
+
+        keys = [f"k{idx}" for idx in range(7)]
+        values = [f"v{idx}" for idx in range(7)]
+
+        for k, v in zip(keys, values):
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+        for k, v in zip(keys, values):
+            self.assertEqual(store.get(k), v)
+        store.close()
+
+        with open(self.file.path, "rt") as f:
+            jregistry = json.load(f)
+            assert len(jregistry) == 2
+        for file_id in range(2):
+            data_path = os.path.join(
+                os.path.dirname(self.file.path), f"data_0{file_id}.bin"
+            )
+            assert os.path.isfile(data_path)
+
+    def test_two_delete(self) -> None:
+        store = DiskStorage(file_name=self.file.path, max_size=60)
+
+        keys = [f"k{idx}" for idx in range(7)]
+        values = [f"v{idx}" for idx in range(7)]
+
+        for i in range(7):
+            k = keys[i]
+            v = values[i]
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+            if i == 3:
+                store.delete(keys[1])
+        self.assertEqual(store.get(keys[1]), "")
+        store.close()
+
+        store = DiskStorage(file_name=self.file.path, max_size=60)
+        self.assertEqual(store.get(keys[1]), "")
+        for i in range(7):
+            k = keys[i]
+            v = values[i]
+            if i == 1:
+                self.assertEqual(store.get(k), "")
+            else:
+                self.assertEqual(store.get(k), v)
+        store.close()
+
 
 class TestDiskCDBExistingFile(unittest.TestCase):
+    def setUp(self) -> None:
+        self.file: TempStorageFile = TempStorageFile()
+
+    def tearDown(self) -> None:
+        self.file.clean_up()
+
     def test_get_new_file(self) -> None:
-        t = TempStorageFile(path="temp.db")
-        store = DiskStorage(file_name=t.path)
+        store = DiskStorage(file_name=self.file.path)
         store.set("name", "jojo")
         self.assertEqual(store.get("name"), "jojo")
         store.close()
 
         # check for key again
-        store = DiskStorage(file_name=t.path)
+        store = DiskStorage(file_name=self.file.path)
         self.assertEqual(store.get("name"), "jojo")
         store.close()
-        t.clean_up()

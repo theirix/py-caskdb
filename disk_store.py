@@ -19,6 +19,7 @@ Typical usage example:
     # it also supports dictionary style API too:
     disk["hamlet"] = "shakespeare"
 """
+import json
 import os.path
 import typing
 import datetime
@@ -57,7 +58,7 @@ from format import encode_kv, decode_kv, decode_header, HEADER_SIZE
 
 @dataclass(frozen=True)
 class KeyDirEntry:
-    file_name: str
+    file_id: int
     size: int
     pos: int
     tstamp: int
@@ -83,8 +84,10 @@ class KeyDir:
         if start_idx == len(self._dir):
             return
         for idx in range(start_idx, len(self._dir)):
-            if keys[idx] <= end:
-                yield keys[idx]
+            # noinspection PyUnresolvedReferences
+            key = keys[idx]
+            if key <= end:
+                yield key
             else:
                 break
 
@@ -99,43 +102,107 @@ class DiskStorage:
             pass the full file location too.
     """
 
-    def __init__(self, file_name: str = "data.db"):
-        self._file_name = file_name
-        if os.path.isfile(file_name):
-            self._file = open(file_name, "r+b")
+    def __init__(self, file_name: str = "data.db", max_size: int = -1):
+        self._registry_name = file_name
+        print("Provided registry {}".format(self._registry_name))
+        self._max_size = max_size
+        # active file size
+        self._size = 0
+
+        if not os.path.isfile(self._registry_name):
+            self._registry = dict()
         else:
-            self._file = open(file_name, "w+b")
+            with open(self._registry_name, "rt") as f:
+                deserialized = json.load(f)
+                self._registry = {
+                    int(file_id_str): content
+                    for file_id_str, content in deserialized.items()
+                }
+        print("Registry", self._registry)
+        # open descriptors
+        self._fds = dict()
+        sorted_file_ids = sorted(self._registry.keys())
+        for file_id in sorted_file_ids:
+            assert isinstance(file_id, int)
+            data_file = self._registry[file_id]
+            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+            if os.path.isfile(data_path):
+                fd = open(data_path, "r+b")
+            else:
+                fd = open(data_path, "w+b")
+            self._fds[file_id] = fd
+
+        if not self._registry:
+            print("Add first file")
+            self._registry_add_file()
+
         self._keydir = KeyDir()
 
+        for file_id in sorted_file_ids:
+            self._fill_keydir(file_id)
+
+    def _active_file_id(self) -> int:
+        file_id = max(self._registry.keys())
+        assert isinstance(file_id, int)
+        return file_id
+
+    def _registry_count_files(self):
+        return len(self._registry)
+
+    def _registry_add_file(self):
+        count_files = self._registry_count_files()
+        file_id = count_files
+        data_file = f"data_{file_id:0>2}.bin"
+        self._registry[file_id] = data_file
+
+        data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+        if os.path.isfile(data_path):
+            raise RuntimeError(
+                f"File {data_file} already exist for {file_id=}; registry={self._registry}"
+            )
+
+        # it is a new file
+        fd = open(data_path, "w+b")
+        self._fds[file_id] = fd
+        self._size = 0
+
+        # write metadata
+        with open(self._registry_name, "wt") as f:
+            serialized = {
+                str(file_id): content for file_id, content in self._registry.items()
+            }
+            json.dump(serialized, f, indent=True)
+
+        # Determine size for active file
+        fd.seek(0, 2)
+        self._size = fd.tell()
+
+    def _fill_keydir(self, file_id: int) -> None:
+        fd = self._fds[file_id]
+
         # Determine size
-        self._file.seek(0, 2)
-        self._size = self._file.tell()
+        fd.seek(0, 2)
+        self._size = fd.tell()
 
-        self._fill_keydir()
-
-    def _fill_keydir(self) -> None:
         print(f"Fill keydir initially size={self._size}")
         pos = 0
         while pos < self._size:
             # Read header
-            self._file.seek(pos + 4)
-            header = self._file.read(HEADER_SIZE)
+            fd.seek(pos + 4)
+            header = fd.read(HEADER_SIZE)
             timestamp, key_size, value_size = decode_header(header)
             print(f"From {pos=} read header {timestamp=} {key_size=} {value_size=}")
 
             # Re-read whole entry
-            self._file.seek(pos)
+            fd.seek(pos)
             read_size = 4 + HEADER_SIZE + key_size + value_size
-            data = self._file.read(read_size)
+            data = fd.read(read_size)
             print(f"From {pos=} read data {read_size=}")
 
             timestamp, key, _ = decode_kv(data)
 
             entry = KeyDirEntry(
-                pos=pos,
-                size=key_size + value_size,
-                tstamp=timestamp,
-                file_name=self._file_name,
+                pos=pos, size=key_size + value_size, tstamp=timestamp, file_id=file_id
             )
             self._keydir.set(key, entry)
 
@@ -149,32 +216,41 @@ class DiskStorage:
         return round(datetime.datetime.utcnow().timestamp())
 
     def set(self, key: str, value: str) -> None:
+        fd = self._fds[self._active_file_id()]
+
         timestamp = self._timestamp()
         size, data = encode_kv(timestamp, key, value)
 
-        offset = self._file.seek(self._size)
+        offset = fd.seek(self._size)
         print(f"set seek to {offset}")
         # print(f"write size {size+4} bytes, data {data.hex()}")
-        self._file.write(data)
+        fd.write(data)
         write_size = 4 + HEADER_SIZE + size
         self._size += write_size
 
         entry = KeyDirEntry(
-            pos=offset, size=size, tstamp=timestamp, file_name=self._file_name
+            pos=offset, size=size, tstamp=timestamp, file_id=self._active_file_id()
         )
         self._keydir.set(key, entry)
 
         print(f"set keydir key={key} entry={entry}, size so far {self._size}")
+
+        if self._max_size != -1 and self._size > self._max_size:
+            self.split()
+
+    def split(self):
+        self._registry_add_file()
 
     def get(self, key: str) -> str:
         entry = self._keydir.get(key)
         if entry is None:
             return ""
 
+        fd = self._fds[entry.file_id]
         print(f"get seek to {entry.pos} with size {entry.size}")
-        self._file.seek(entry.pos)
+        fd.seek(entry.pos)
         read_size = 4 + HEADER_SIZE + entry.size
-        data = self._file.read(read_size)
+        data = fd.read(read_size)
         # print(f"read size {entry.size+4} bytes, data {data.hex()}")
         timestamp, read_key, read_value = decode_kv(data)
         if key != read_key:
@@ -186,8 +262,15 @@ class DiskStorage:
         self._keydir.delete(key)
 
     def close(self) -> None:
-        self._file.flush()
-        self._file.close()
+        fd = self._fds[self._active_file_id()]
+        fd.flush()
+        fd.close()
+
+    def clean(self) -> None:
+        for data_file in self._registry.values():
+            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+            if os.path.isfile(data_path):
+                os.remove(data_path)
 
     def __setitem__(self, key: str, value: str) -> None:
         return self.set(key, value)
