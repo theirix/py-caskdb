@@ -1,4 +1,4 @@
-import os
+import shutil
 import tempfile
 import typing
 import unittest
@@ -28,17 +28,19 @@ class TempStorageFile:
     def __init__(self, path: typing.Optional[str] = None):
         if path:
             self.path = path
+            self.dirpath = None
             return
 
-        fd, self.path = tempfile.mkstemp()
-        os.close(fd)
+        self.dirpath = tempfile.mkdtemp(prefix="pycaskdb")
+        self.path = self.dirpath + "/main.db"
 
     def clean_up(self) -> None:
         # NOTE: you might be tempted to use the destructor method `__del__`, however
         # destructor method gets called whenever the object goes out of scope, and it
         # will delete our database file. Having a separate method would give us better
         # control.
-        os.remove(self.path)
+        if self.dirpath and len(self.dirpath.split('/')) > 2:
+            shutil.rmtree(self.dirpath)
 
 
 class TestDiskCDB(unittest.TestCase):
