@@ -1,7 +1,9 @@
 import datetime
 import json
+import logging
 import os.path
 import shutil
+import sys
 import tempfile
 import typing
 import unittest
@@ -48,6 +50,7 @@ class TempStorageFile:
 
 class TestDiskCDB(unittest.TestCase):
     def setUp(self) -> None:
+        logging.basicConfig(stream=sys.stdout, level="INFO")
         self.file: TempStorageFile = TempStorageFile()
 
     def tearDown(self) -> None:
@@ -246,8 +249,7 @@ class TestDiskCDB(unittest.TestCase):
     @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=100))
     @settings(deadline=datetime.timedelta(seconds=5))
     def test_compaction_hyp(self, keys) -> None:
-        store = DiskStorage(file_name=self.file.path,
-                            max_size=100)
+        store = DiskStorage(file_name=self.file.path, max_size=100)
 
         def genv(key):
             return f"value_{key}."

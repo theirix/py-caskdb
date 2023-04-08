@@ -20,6 +20,7 @@ Typical usage example:
     disk["hamlet"] = "shakespeare"
 """
 import json
+import logging
 import os.path
 import typing
 import datetime
@@ -54,6 +55,9 @@ from format import encode_kv, decode_kv, decode_header, HEADER_SIZE
 #   - Deleted keys need to be purged from the file to reduce the file size
 #
 # Read the paper for more details: https://riak.com/assets/bitcask-intro.pdf
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,7 @@ class DiskStorage:
 
     def __init__(self, file_name: str = "data.db", max_size: int = -1):
         self._registry_name = file_name
-        print("Provided registry {}".format(self._registry_name))
+        logger.info("Provided registry {}".format(self._registry_name))
         self._max_size = max_size
         # active file size
         self._size = 0
@@ -121,7 +125,7 @@ class DiskStorage:
                     int(file_id_str): content
                     for file_id_str, content in deserialized.items()
                 }
-        print("Registry", self._registry)
+        logger.info("Registry", self._registry)
         # open descriptors
         self._fds = dict()
         sorted_file_ids = sorted(self._registry.keys())
@@ -136,7 +140,7 @@ class DiskStorage:
             self._fds[file_id] = fd
 
         if not self._registry:
-            print("Add first file")
+            logger.info("Add first file")
             self._registry_add_file()
 
         self._keydir = KeyDir()
@@ -188,20 +192,22 @@ class DiskStorage:
         fd.seek(0, 2)
         self._size = fd.tell()
 
-        print(f"Fill keydir initially size={self._size}")
+        logger.info(f"Fill keydir initially size={self._size}")
         pos = 0
         while pos < self._size:
             # Read header
             fd.seek(pos + 4)
             header = fd.read(HEADER_SIZE)
             timestamp, key_size, value_size = decode_header(header)
-            print(f"From {pos=} read header {timestamp=} {key_size=} {value_size=}")
+            logger.debug(
+                f"From {pos=} read header {timestamp=} {key_size=} {value_size=}"
+            )
 
             # Re-read whole entry
             fd.seek(pos)
             read_size = 4 + HEADER_SIZE + key_size + value_size
             data = fd.read(read_size)
-            print(f"From {pos=} read data {read_size=}")
+            logger.debug(f"From {pos=} read data {read_size=}")
 
             timestamp, key, _ = decode_kv(data)
 
@@ -210,7 +216,7 @@ class DiskStorage:
             )
             self._keydir.set(key, entry)
 
-            print(f"init keydir key={key} entry={entry}")
+            logger.debug(f"init keydir key={key} entry={entry}")
 
             pos += read_size
 
@@ -226,8 +232,8 @@ class DiskStorage:
         size, data = encode_kv(timestamp, key, value)
 
         offset = fd.seek(self._size)
-        print(f"set seek to {offset}")
-        # print(f"write size {size+4} bytes, data {data.hex()}")
+        logger.debug(f"set seek to {offset}")
+        # logger.debug(f"write size {size+4} bytes, data {data.hex()}")
         fd.write(data)
         write_size = 4 + HEADER_SIZE + size
         self._size += write_size
@@ -237,7 +243,7 @@ class DiskStorage:
         )
         self._keydir.set(key, entry)
 
-        print(f"set keydir key={key} entry={entry}, size so far {self._size}")
+        logger.debug(f"set keydir key={key} entry={entry}, size so far {self._size}")
 
         if self._max_size != -1 and self._size > self._max_size:
             self.split()
@@ -259,7 +265,7 @@ class DiskStorage:
 
         # Close and remove all previous files
         for file_id in sorted_file_ids:
-            print(f"Closing {file_id}")
+            logger.info(f"Closing {file_id}")
             self._fds[file_id].close()
             data_file = self._registry[file_id]
             data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
@@ -276,11 +282,11 @@ class DiskStorage:
             return ""
 
         fd = self._fds[entry.file_id]
-        print(f"get seek to {entry.pos} with size {entry.size}")
+        logger.debug(f"get seek to {entry.pos} with size {entry.size}")
         fd.seek(entry.pos)
         read_size = 4 + HEADER_SIZE + entry.size
         data = fd.read(read_size)
-        # print(f"read size {entry.size+4} bytes, data {data.hex()}")
+        # logger.debug(f"read size {entry.size+4} bytes, data {data.hex()}")
         timestamp, read_key, read_value = decode_kv(data)
         if key != read_key:
             raise ValueError(f"Different keys: keydir {key}, disk {read_key}")
