@@ -3,6 +3,8 @@ import tempfile
 import typing
 import unittest
 
+from hypothesis import given, strategies as st
+
 from disk_store import DiskStorage
 
 
@@ -137,6 +139,25 @@ class TestDiskCDB(unittest.TestCase):
 
         scanned = list(sorted(list(store.scan("brave", "aelita"))))
         assert scanned == []
+
+    @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=100))
+    def test_multi(self, keys) -> None:
+        store = DiskStorage(file_name=self.file.path)
+
+        def genv(key): return f"value_{key}."
+
+        for k in keys:
+            v = genv(k)
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+        for k in keys:
+            self.assertEqual(store.get(k), genv(k))
+        store.close()
+
+        store = DiskStorage(file_name=self.file.path)
+        for k in keys:
+            self.assertEqual(store.get(k), genv(k))
+        store.close()
 
 
 class TestDiskCDBExistingFile(unittest.TestCase):
