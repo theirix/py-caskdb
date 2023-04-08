@@ -91,6 +91,9 @@ class KeyDir:
             else:
                 break
 
+    def keys(self) -> typing.Iterable[str]:
+        return self._dir.keys()
+
 
 class DiskStorage:
     """
@@ -150,8 +153,10 @@ class DiskStorage:
         return len(self._registry)
 
     def _registry_add_file(self):
-        count_files = self._registry_count_files()
-        file_id = count_files
+        if self._registry:
+            file_id = self._active_file_id() + 1
+        else:
+            file_id = 0
         data_file = f"data_{file_id:0>2}.bin"
         self._registry[file_id] = data_file
 
@@ -166,16 +171,15 @@ class DiskStorage:
         self._fds[file_id] = fd
         self._size = 0
 
+        self._save_registry()
+
+    def _save_registry(self):
         # write metadata
         with open(self._registry_name, "wt") as f:
             serialized = {
                 str(file_id): content for file_id, content in self._registry.items()
             }
             json.dump(serialized, f, indent=True)
-
-        # Determine size for active file
-        fd.seek(0, 2)
-        self._size = fd.tell()
 
     def _fill_keydir(self, file_id: int) -> None:
         fd = self._fds[file_id]
@@ -240,6 +244,31 @@ class DiskStorage:
 
     def split(self):
         self._registry_add_file()
+
+    def compact(self):
+        # Compact all exisiting files to new active file
+        sorted_file_ids = sorted(self._registry.keys())
+
+        # Add new file
+        self._registry_add_file()
+
+        # Iterate over all keys
+        for key in self._keydir.keys():
+            value = self.get(key)
+            self.set(key, value)
+
+        # Close and remove all previous files
+        for file_id in sorted_file_ids:
+            print(f"Closing {file_id}")
+            self._fds[file_id].close()
+            data_file = self._registry[file_id]
+            data_path = os.path.join(os.path.dirname(self._registry_name), data_file)
+            if os.path.isfile(data_path):
+                os.remove(data_path)
+            del self._fds[file_id]
+            del self._registry[file_id]
+
+        self._save_registry()
 
     def get(self, key: str) -> str:
         entry = self._keydir.get(key)

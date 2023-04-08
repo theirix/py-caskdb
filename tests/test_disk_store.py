@@ -1,3 +1,4 @@
+import datetime
 import json
 import os.path
 import shutil
@@ -5,7 +6,7 @@ import tempfile
 import typing
 import unittest
 
-from hypothesis import given, strategies as st
+from hypothesis import given, settings, strategies as st
 
 from disk_store import DiskStorage
 
@@ -211,6 +212,68 @@ class TestDiskCDB(unittest.TestCase):
                 self.assertEqual(store.get(k), "")
             else:
                 self.assertEqual(store.get(k), v)
+        store.close()
+
+    def test_compaction(self) -> None:
+        store = DiskStorage(file_name=self.file.path, max_size=60)
+
+        keys = [f"k{idx}" for idx in range(7)]
+        values = [f"v{idx}" for idx in range(7)]
+
+        for i in range(7):
+            k = keys[i]
+            v = values[i]
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+
+        for i in range(7):
+            k = keys[i]
+            v = values[i]
+            if i % 2 == 0:
+                store.set(k, v)
+
+        store.compact()
+
+        for file_id in range(2):
+            data_path = os.path.join(
+                os.path.dirname(self.file.path), f"data_0{file_id}.bin"
+            )
+            self.assertFalse(os.path.isfile(data_path))
+
+        for k, v in zip(keys, values):
+            self.assertEqual(store.get(k), v)
+
+    @given(st.lists(st.text(min_size=1, max_size=10), min_size=1, max_size=100))
+    @settings(deadline=datetime.timedelta(seconds=5))
+    def test_compaction_hyp(self, keys) -> None:
+        store = DiskStorage(file_name=self.file.path,
+                            max_size=100)
+
+        def genv(key):
+            return f"value_{key}."
+
+        actual = {}
+        for k in keys:
+            v = genv(k)
+            store.set(k, v)
+            self.assertEqual(store.get(k), v)
+            actual[k] = v
+        for i in range(len(keys)):
+            k = keys[i]
+            if i % 3 == 0:
+                v = genv(k) + "add"
+                store.set(k, v)
+                actual[k] = v
+        store.compact()
+
+        for k in keys:
+            self.assertEqual(store.get(k), actual[k])
+        store.close()
+
+        # Reopen
+        store = DiskStorage(file_name=self.file.path)
+        for k in keys:
+            self.assertEqual(store.get(k), actual[k])
         store.close()
 
 
