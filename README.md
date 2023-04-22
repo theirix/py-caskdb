@@ -1,32 +1,46 @@
-# CDB - Disk based Log Structured Hash Table Store
+# CaskDB - Disk based Log Structured Hash Table Store
 
-![made-with-python](https://img.shields.io/badge/Made%20with-Python-1f425f.svg)
-[![build](https://github.com/avinassh/cdb/actions/workflows/build.yml/badge.svg)](https://github.com/avinassh/cdb/actions/workflows/build.yml)
-[![codecov](https://codecov.io/gh/avinassh/cdb/branch/master/graph/badge.svg?token=9SA8Q4L7AZ)](https://codecov.io/gh/avinassh/cdb)
-[![GitHub license](https://badgen.net/github/license/Naereen/Strapdown.js)](https://github.com/avinassh/cdb/blob/master/LICENSE)
+![architecture](https://user-images.githubusercontent.com/640792/167299554-0fc44510-d500-4347-b680-258e224646fa.png)
 
-![architecture](https://user-images.githubusercontent.com/640792/166490746-fb41709e-cdb5-4c9a-a58b-f4e6d530b5c7.png)
+In this fork of [pycaskdb](https://github.com/avinassh/py-caskdb) a basic Bitcask storage engine
+is designed and developed. Check [my blogpost](https://omniverse.ru/blog/2023/04/17/riak/) for more details
+on this design.
 
-(educational) build your own disk based KV store
-
-## What Next?
-
-cdb has following the limitations, improving them would be a great challenge for the next step:
+CaskDB is a disk-based, embedded, persistent, key-value store based on the [Riak's bitcask paper](https://riak.com/assets/bitcask-intro.pdf), written in Python. It is more focused on the educational capabilities than using it in production. The file format is platform, machine, and programming language independent. Say, the database file created from Python on macOS should be compatible with Rust on Windows.
 
 
-## Line Count
+What is done:
+- Implemented the fixed-sized header, which can encode timestamp (uint, 4 bytes), key size (uint, 4 bytes), value size (uint, 4 bytes) together 
+- Implemented the key, value serialisers, and pass the tests from `test_format.py`
+- Figured out how to store the data on disk and the row pointer in the memory
+- Implemented the get/set operations. Tests for the same are in `test_disk_store.py`
+- Implemented compaction
+- Added a JSON registry for directory with datafiles 
+- Unbundled to different components - keydir, registry, descriptor table
+- Heavily refactored tests
+- Moved to Poetry and Python 3.11
+- Implemented range scans
+- Introduced property-based tests with Hypothesis to ensure correctness of implentation
 
-```shell
-$ tokei -f format.py disk_store.py
+## Features
+- Low latency for reads and writes
+- High throughput
+- Easy to back up / restore 
+- Simple and easy to understand
+- Store data much larger than the RAM
 
-===============================================================================
- Language            Files        Lines         Code     Comments       Blanks
-===============================================================================
- Python                  2          383          255          103           25
--------------------------------------------------------------------------------
- disk_store.py                      196          114           70           12
- format.py                          187          141           33           13
-===============================================================================
- Total                   2          383          255          103           25
-===============================================================================
-```
+## Limitations
+Most of the following limitations are of CaskDB. However, there are some due to design constraints by the Bitcask paper.
+
+- Single file stores all data, and deleted keys still take up the space
+- CaskDB does not offer range scans
+- CaskDB requires keeping all the keys in the internal memory. With a lot of keys, RAM usage will be high 
+- Slow startup time since it needs to load all the keys in memory
+
+## How to run
+
+	poetry install
+    poetry run make test lint
+
+## License
+The MIT license. Please check `LICENSE` for more details.
