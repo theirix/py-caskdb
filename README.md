@@ -3,7 +3,7 @@
 ![architecture](https://user-images.githubusercontent.com/640792/167299554-0fc44510-d500-4347-b680-258e224646fa.png)
 
 In this fork of [pycaskdb](https://github.com/avinassh/py-caskdb) a basic Bitcask storage engine
-is designed and developed. Check [my blogpost](https://omniverse.ru/blog/2023/04/17/riak/) for more details
+is designed and developed. Check [my blogpost](https://omniverse.ru/blog/2023/04/23/riak/) for more details
 on this design.
 
 CaskDB is a disk-based, embedded, persistent, key-value store based on the [Riak's bitcask paper](https://riak.com/assets/bitcask-intro.pdf), written in Python. It is more focused on the educational capabilities than using it in production. The file format is platform, machine, and programming language independent. Say, the database file created from Python on macOS should be compatible with Rust on Windows.
